@@ -1,4 +1,4 @@
-name: UAE 10K Fast Extract
+name: UAE 100K Intelligence Extract
 on:
   push:
     branches: [main]
@@ -11,13 +11,13 @@ on:
       limit:
         description: 'UAE companies to extract'
         required: false
-        default: '10000'
+        default: '100000'
 jobs:
   extract:
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:
-      UAE_LIMIT: ${{ github.event.inputs.limit || '10000' }}
+      UAE_LIMIT: ${{ github.event.inputs.limit || '100000' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,7 +33,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: UAE-10K-Excel
+          name: UAE-100K-Excel
           path: output/*
           retention-days: 30
           if-no-files-found: warn
