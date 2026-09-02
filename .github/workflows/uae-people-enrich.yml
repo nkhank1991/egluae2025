@@ -1,0 +1,75 @@
+name: UAE People Enrichment
+on:
+  workflow_dispatch:
+    inputs:
+      shard_size:
+        description: 'Companies per shard'
+        required: false
+        default: '10000'
+      workers:
+        description: 'Concurrent website workers per shard'
+        required: false
+        default: '12'
+  push:
+    branches: [main]
+    paths:
+      - 'enrich_uae_people.py'
+      - 'merge_uae_people.py'
+      - 'requirements-enrich.txt'
+      - '.github/workflows/uae-people-enrich.yml'
+
+jobs:
+  enrich:
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9]
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      SHARD: ${{ matrix.shard }}
+      SHARD_SIZE: ${{ github.event.inputs.shard_size || '10000' }}
+      CRAWL_WORKERS: ${{ github.event.inputs.workers || '12' }}
+      MAX_PAGES: '6'
+      HTTP_TIMEOUT: '12'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements-enrich.txt
+      - name: Enrich current chiefs and marketing leaders
+        run: python enrich_uae_people.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: UAE-people-shard-${{ matrix.shard }}
+          path: output/*
+          retention-days: 30
+          if-no-files-found: warn
+
+  merge:
+    needs: enrich
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements-enrich.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: UAE-people-shard-*
+          path: shards
+          merge-multiple: false
+      - name: Merge person-level decision-maker database
+        run: python merge_uae_people.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UAE-Current-Chief-Marketing-Contacts
+          path: output/*
+          retention-days: 30
