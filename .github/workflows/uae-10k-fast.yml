@@ -1,0 +1,39 @@
+name: UAE 10K Fast Extract
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extract_uae_10k_fast.py'
+      - 'requirements.txt'
+      - '.github/workflows/uae-10k-fast.yml'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'UAE companies to extract'
+        required: false
+        default: '10000'
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      UAE_LIMIT: ${{ github.event.inputs.limit || '10000' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Run country-filtered UAE extraction
+        run: python extract_uae_10k_fast.py
+      - name: Print summary
+        if: always()
+        run: cat output/summary.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: UAE-10K-Excel
+          path: output/*
+          retention-days: 30
+          if-no-files-found: warn
