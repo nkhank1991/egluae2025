@@ -3,15 +3,16 @@ from urllib.parse import quote_plus, urlparse
 import duckdb
 import pandas as pd
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 
 LIMIT = int(os.getenv('UAE_LIMIT', '100000'))
 OUT = 'output'
 os.makedirs(OUT, exist_ok=True)
 RELEASE = os.getenv('OVERTURE_RELEASE', '2026-08-19.0')
 PATH = f's3://overturemaps-us-west-2/release/{RELEASE}/theme=places/type=place/*'
-
-# UAE geographic envelope. Country code is also checked where present.
 MIN_LON, MAX_LON = 51.3, 56.7
 MIN_LAT, MAX_LAT = 22.5, 26.6
 
@@ -28,28 +29,42 @@ def clean_domain(url):
         return ''
 
 
+def excel_safe(value):
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        # Excel XML rejects control characters such as vertical-tab (\x0b).
+        return ILLEGAL_CHARACTERS_RE.sub('', value)[:32767]
+    return value
+
+
 def save_excel(df, path):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = 'UAE 100K Companies'
-    ws.append(list(df.columns))
-    for c in ws[1]:
+    # Streaming mode prevents a 100K x ~38-cell workbook from consuming huge RAM.
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet('UAE 100K Companies')
+    ws.freeze_panes = 'A2'
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(df.columns))}{len(df)+1}"
+
+    widths = [38, 26, 24, 36, 28, 28, 24, 38, 42, 20, 20, 16, 20, 14, 18]
+    for idx in range(1, len(df.columns) + 1):
+        ws.column_dimensions[get_column_letter(idx)].width = widths[idx-1] if idx <= len(widths) else 28
+
+    header = []
+    for name in df.columns:
+        c = WriteOnlyCell(ws, value=excel_safe(str(name)))
         c.font = Font(bold=True, color='FFFFFF')
         c.fill = PatternFill('solid', fgColor='1F4E78')
         c.alignment = Alignment(wrap_text=True, vertical='top')
+        header.append(c)
+    ws.append(header)
+
     for row in df.fillna('').itertuples(index=False, name=None):
-        ws.append(list(row))
-    ws.freeze_panes = 'A2'
-    ws.auto_filter.ref = ws.dimensions
-    widths = {
-        'A': 38, 'B': 26, 'C': 24, 'D': 36, 'E': 28, 'F': 22, 'G': 24,
-        'H': 42, 'I': 18, 'J': 22, 'K': 35, 'L': 35, 'M': 20, 'N': 18
-    }
-    for col, width in widths.items():
-        ws.column_dimensions[col].width = width
-    for row in ws.iter_rows():
-        for c in row:
+        cells = []
+        for value in row:
+            c = WriteOnlyCell(ws, value=excel_safe(value))
             c.alignment = Alignment(vertical='top', wrap_text=True)
+            cells.append(c)
+        ws.append(cells)
     wb.save(path)
 
 
@@ -58,9 +73,6 @@ con.execute("INSTALL httpfs")
 con.execute("LOAD httpfs")
 con.execute("SET s3_region='us-west-2'")
 
-# Overture Places is a real-world places/business dataset. We pull UAE records by
-# both bounding box and address country when available, remove permanently closed
-# places, and keep higher-confidence records first.
 query = f"""
 WITH uae AS (
   SELECT
@@ -111,8 +123,6 @@ print(f'Querying Overture {RELEASE} for up to {LIMIT:,} UAE business/place recor
 df = con.execute(query).df()
 print(f'Overture UAE rows returned: {len(df):,}', flush=True)
 
-# Add B2B research fields. These are deliberately explicit about what is and is
-# not yet researched/verified; no fabricated executives or emails.
 df['domain'] = df['website'].map(clean_domain)
 df['country'] = 'United Arab Emirates'
 df['source'] = f'Overture Maps Places {RELEASE}'
@@ -135,7 +145,6 @@ df['email_note'] = df['published_company_emails'].map(
     lambda x: 'Published business email from source; mailbox not independently verified' if str(x).strip() not in ('', 'nan', 'None') else 'No published email in base source'
 )
 
-# Commercially useful ordering for the master workbook.
 front = [
     'company_name', 'category', 'basic_category', 'website', 'domain', 'published_company_emails',
     'public_business_phones', 'social_urls', 'address', 'locality', 'region', 'postcode',
@@ -154,7 +163,6 @@ xlsx_path = f'{OUT}/UAE_100K_Master.xlsx'
 parquet_path = f'{OUT}/UAE_100K_Companies.parquet'
 df.to_csv(csv_path, index=False)
 df.to_parquet(parquet_path, index=False)
-save_excel(df, xlsx_path)
 
 summary = {
     'requested_limit': LIMIT,
@@ -165,8 +173,10 @@ summary = {
     'with_social_url': int(df['social_urls'].fillna('').astype(str).str.strip().ne('').sum()),
     'source': f'Overture Maps Places {RELEASE}',
     'master_excel': 'UAE_100K_Master.xlsx',
-    'note': 'This is the real UAE company/place base layer. Executive/marketing names, inferred emails, mailbox verification, business-mobile enrichment and campaign intelligence remain separate enrichment stages and are never fabricated.'
+    'note': 'Real UAE business/place base layer. Executive/marketing enrichment remains a separate stage and is never fabricated.'
 }
 with open(f'{OUT}/summary.json', 'w', encoding='utf-8') as f:
     json.dump(summary, f, indent=2, ensure_ascii=False)
+
+save_excel(df, xlsx_path)
 print(json.dumps(summary, indent=2), flush=True)
